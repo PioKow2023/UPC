@@ -133,16 +133,14 @@ void updateLedParameters(float voltage) {
   int maxBrightness = getMaxLedBrightness(voltage);
   
   if (voltage > BATTERY_VOLTAGE_VERY_HIGH) {
-    // Very high voltage: Red, pulse 4 times per second
-    pulsePeriod = PULSE_FAST;
-    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    // Very high voltage: Red, no pulsing
+    analogWrite(LED_RED_PIN, maxBrightness);
     analogWrite(LED_GREEN_PIN, 0);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_HIGH) {
-    // High voltage: Green, pulse once every 4 seconds
-    pulsePeriod = PULSE_VERY_SLOW;
+    // High voltage: Green, no pulsing
     analogWrite(LED_RED_PIN, 0);
-    analogWrite(LED_GREEN_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    analogWrite(LED_GREEN_PIN, maxBrightness);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_LOW) {
     // Medium voltage: Rainbow transition from red to green (no pulsing)
@@ -163,15 +161,13 @@ void updateLedParameters(float voltage) {
     analogWrite(LED_GREEN_PIN, greenValue);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_VERY_LOW) {
-    // Low voltage: Red, pulse once every 1 second
-    pulsePeriod = PULSE_MEDIUM;
-    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    // Low voltage: Red, no pulsing
+    analogWrite(LED_RED_PIN, maxBrightness);
     analogWrite(LED_GREEN_PIN, 0);
     analogWrite(LED_BLUE_PIN, 0);
   } else {
-    // Very low voltage: Red, pulse once every 4 seconds (half the previous speed)
-    pulsePeriod = PULSE_VERY_SLOW;
-    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    // Very low voltage: Red, no pulsing
+    analogWrite(LED_RED_PIN, maxBrightness);
     analogWrite(LED_GREEN_PIN, 0);
     analogWrite(LED_BLUE_PIN, 0);
   }
@@ -179,35 +175,8 @@ void updateLedParameters(float voltage) {
 
 // Function to handle LED pulsing
 void handleLedPulsing(float voltage) {
-  // For voltage range 11.4V-11.8V, we don't want pulsing, just static color transition
-  if (voltage > BATTERY_VOLTAGE_LOW && voltage <= BATTERY_VOLTAGE_HIGH) {
-    // Use maximum brightness for this range
-    ledBrightness = LED_BRIGHTNESS_MAX;
-    updateLedParameters(voltage);
-    return;
-  }
-  
-  unsigned long currentTime = millis();
-  
-  // Check if we need to start a new pulse cycle
-  unsigned long pulsePeriodMs = (unsigned long)(pulsePeriod * 1000);
-  if (currentTime - pulseStartTime >= pulsePeriodMs) {
-    pulseStartTime = currentTime;
-  }
-  
-  // Calculate position within the current pulse cycle (0 to pulsePeriodMs-1)
-  unsigned long timeInCycle = currentTime - pulseStartTime;
-  
-  // Calculate LED brightness based on position in cycle
-  // First half: brighten (0 to pulsePeriodMs/2-1)
-  // Second half: dim (pulsePeriodMs/2 to pulsePeriodMs-1)
-  if (timeInCycle < pulsePeriodMs/2) {
-    // Brighten: map timeInCycle from 0..pulsePeriodMs/2-1 to 0..255
-    ledBrightness = (int)((timeInCycle * 255) / (pulsePeriodMs/2 - 1));
-  } else {
-    // Dim: map timeInCycle from pulsePeriodMs/2..pulsePeriodMs-1 to 255..0
-    ledBrightness = (int)(((pulsePeriodMs - 1 - timeInCycle) * 255) / (pulsePeriodMs/2 - 1));
-  }
+  // No more pulsing - just set maximum brightness
+  ledBrightness = LED_BRIGHTNESS_MAX;
   
   // Update LED with new brightness
   updateLedParameters(voltage);
