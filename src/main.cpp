@@ -145,7 +145,7 @@ void updateLedParameters(float voltage) {
     analogWrite(LED_GREEN_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_LOW) {
-    // Medium voltage: Rainbow transition from red to green
+    // Medium voltage: Rainbow transition from red to green (no pulsing)
     // Map voltage (11.4V-11.8V) to color (red to green)
     float voltageRange = BATTERY_VOLTAGE_HIGH - BATTERY_VOLTAGE_LOW;
     float voltageOffset = voltage - BATTERY_VOLTAGE_LOW;
