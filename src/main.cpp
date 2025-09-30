@@ -89,6 +89,8 @@ bool powerLossDetected = false; // Flag to track power loss
 unsigned long lastPowerLossBlink = 0; // For blinking BAT/OUT labels during power loss
 bool powerLossLabelsVisible = true; // For toggling BAT/OUT labels visibility
 unsigned long lastColorChange = 0; // For random color changes above 14V
+bool lowVoltageAlertShown = false; // Flag to track if low voltage alert was shown
+unsigned long lowVoltageAlertTime = 0; // Time when low voltage alert was shown
 
 // Font definitions
 #define LABEL_FONT u8g2_font_5x8_tf
@@ -356,41 +358,121 @@ void loop() {
     // Clear the display
     u8g2.clearBuffer();
     
-    // Set font for labels - using a narrow font
-    u8g2.setFont(LABEL_FONT);
-    
-    // Draw left side - "BAT" text vertically (conditionally during power loss)
-    if (!powerLossDetected || powerLossLabelsVisible) {
-      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
-      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
-      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+    // Check if voltage is below threshold for low voltage alert
+    if (avgBatteryVoltage < BATTERY_VOLTAGE_VERY_LOW) {
+      unsigned long currentTime = millis();
+      
+      // Show low voltage alert for 2 seconds
+      if (!lowVoltageAlertShown) {
+        lowVoltageAlertShown = true;
+        lowVoltageAlertTime = currentTime;
+        
+        // Display low voltage alert
+        u8g2.setFont(LABEL_FONT);
+        u8g2.drawStr(10, 10, "LOW VOLTAGE");
+        u8g2.drawStr(10, 25, "WARNING!");
+        u8g2.sendBuffer();
+      } 
+      // After 2 seconds, return to normal display with blinking values
+      else if (currentTime - lowVoltageAlertTime >= 2000) {
+        // Set font for labels - using a narrow font
+        u8g2.setFont(LABEL_FONT);
+        
+        // Draw left side - "BAT" text vertically (conditionally during power loss)
+        if (!powerLossDetected || powerLossLabelsVisible) {
+          u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
+          u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
+          u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+        }
+        
+        // Draw right side - "OUT" text vertically (conditionally during power loss)
+        if (!powerLossDetected || powerLossLabelsVisible) {
+          u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
+          u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
+          u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+        }
+        
+        // Draw battery voltage with a bold font (blinking)
+        u8g2.setFont(VOLTAGE_FONT);
+        char batteryVoltageStr[6];
+        dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
+        
+        // Blink battery voltage - visible for 500ms, invisible for 500ms
+        static bool batteryVoltageVisible = true;
+        static unsigned long lastBatteryBlinkTime = 0;
+        if (currentTime - lastBatteryBlinkTime >= 500) {
+          batteryVoltageVisible = !batteryVoltageVisible;
+          lastBatteryBlinkTime = currentTime;
+        }
+        
+        if (batteryVoltageVisible) {
+          u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
+        }
+        
+        // Draw output voltage with a bold font (blinking)
+        u8g2.setFont(VOLTAGE_FONT);
+        char outputVoltageStr[6];
+        dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
+        
+        // Blink output voltage - visible for 500ms, invisible for 500ms
+        static bool outputVoltageVisible = true;
+        static unsigned long lastOutputBlinkTime = 0;
+        if (currentTime - lastOutputBlinkTime >= 500) {
+          outputVoltageVisible = !outputVoltageVisible;
+          lastOutputBlinkTime = currentTime;
+        }
+        
+        if (outputVoltageVisible) {
+          u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
+        }
+        
+        // Draw horizontal lines
+        u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
+        u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
+        
+        // Send buffer to display
+        u8g2.sendBuffer();
+      }
+    } else {
+      // Voltage is normal, reset low voltage alert flag
+      lowVoltageAlertShown = false;
+      
+      // Set font for labels - using a narrow font
+      u8g2.setFont(LABEL_FONT);
+      
+      // Draw left side - "BAT" text vertically (conditionally during power loss)
+      if (!powerLossDetected || powerLossLabelsVisible) {
+        u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
+        u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
+        u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+      }
+      
+      // Draw right side - "OUT" text vertically (conditionally during power loss)
+      if (!powerLossDetected || powerLossLabelsVisible) {
+        u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
+        u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
+        u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+      }
+      
+      // Draw battery voltage with a bold font
+      u8g2.setFont(VOLTAGE_FONT);
+      char batteryVoltageStr[6];
+      dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
+      u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
+      
+      // Draw output voltage with a bold font
+      u8g2.setFont(VOLTAGE_FONT);
+      char outputVoltageStr[6];
+      dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
+      u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
+      
+      // Draw horizontal lines
+      u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
+      u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
+      
+      // Send buffer to display
+      u8g2.sendBuffer();
     }
-    
-    // Draw right side - "OUT" text vertically (conditionally during power loss)
-    if (!powerLossDetected || powerLossLabelsVisible) {
-      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
-      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
-      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
-    }
-    
-    // Draw battery voltage with a bold font
-    u8g2.setFont(VOLTAGE_FONT);
-    char batteryVoltageStr[6];
-    dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
-    u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
-    
-    // Draw output voltage with a bold font
-    u8g2.setFont(VOLTAGE_FONT);
-    char outputVoltageStr[6];
-    dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
-    u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
-    
-    // Draw horizontal lines
-    u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
-    u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
-    
-    // Send buffer to display
-    u8g2.sendBuffer();
   }
   
   // Wait before next update
