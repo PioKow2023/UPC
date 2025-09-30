@@ -80,7 +80,6 @@ int sampleIndex = 0;
 
 // LED state variables
 unsigned long lastLedUpdate = 0;
-float pulsePeriod = PULSE_VERY_SLOW; // Convert seconds to milliseconds
 int ledBrightness = 0;
 bool ledDirection = true; // true = increasing, false = decreasing
 unsigned long pulseStartTime = 0;
@@ -89,6 +88,7 @@ unsigned long lastResetButtonPress = 0; // Debounce tracking for reset button
 bool powerLossDetected = false; // Flag to track power loss
 unsigned long lastPowerLossBlink = 0; // For blinking BAT/OUT labels during power loss
 bool powerLossLabelsVisible = true; // For toggling BAT/OUT labels visibility
+unsigned long lastColorChange = 0; // For random color changes above 14V
 
 // Font definitions
 #define LABEL_FONT u8g2_font_5x8_tf
