@@ -179,6 +179,14 @@ void updateLedParameters(float voltage) {
 
 // Function to handle LED pulsing
 void handleLedPulsing(float voltage) {
+  // For voltage range 11.4V-11.8V, we don't want pulsing, just static color transition
+  if (voltage > BATTERY_VOLTAGE_LOW && voltage <= BATTERY_VOLTAGE_HIGH) {
+    // Use maximum brightness for this range
+    ledBrightness = LED_BRIGHTNESS_MAX;
+    updateLedParameters(voltage);
+    return;
+  }
+  
   unsigned long currentTime = millis();
   
   // Check if we need to start a new pulse cycle
