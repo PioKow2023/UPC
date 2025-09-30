@@ -13,6 +13,8 @@
 #define OLED_SDA_PIN 8
 #define OLED_SCL_PIN 9
 #define OLED_RESET_PIN U8X8_PIN_NONE
+#define RELAY_PIN 5  // Define relay pin - can be changed as needed
+#define RESET_BUTTON_PIN 6  // Define reset button pin
 
 // RGB LED pins
 #define LED_RED_PIN 2
@@ -32,6 +34,8 @@
 #define ADC_MAX_VALUE 4095.0
 
 // Voltage thresholds for LED colors
+#define BATTERY_VOLTAGE_RECOVERY 11.0  // Recovery threshold - relay turns back on
+#define BATTERY_VOLTAGE_SHUTDOWN 10.0  // Shutdown threshold
 #define BATTERY_VOLTAGE_VERY_HIGH 14.0
 #define BATTERY_VOLTAGE_HIGH 11.8
 #define BATTERY_VOLTAGE_LOW 11.4
@@ -80,6 +84,8 @@ float pulsePeriod = PULSE_VERY_SLOW; // Convert seconds to milliseconds
 int ledBrightness = 0;
 bool ledDirection = true; // true = increasing, false = decreasing
 unsigned long pulseStartTime = 0;
+bool shutdownActivated = false; // Flag to track if shutdown has been activated
+unsigned long lastResetButtonPress = 0; // Debounce tracking for reset button
 
 // Font definitions
 #define LABEL_FONT u8g2_font_5x8_tf
@@ -187,9 +193,56 @@ void handleLedPulsing(float voltage) {
   updateLedParameters(voltage);
 }
 
+// Function to handle relay and shutdown procedure
+void handleRelayAndShutdown(float voltage) {
+  // Check if battery voltage is below shutdown threshold
+  if (voltage < BATTERY_VOLTAGE_SHUTDOWN && !shutdownActivated) {
+    // Activate shutdown sequence
+    shutdownActivated = true;
+    
+    // Turn on relay to disconnect load
+    digitalWrite(RELAY_PIN, HIGH);
+    
+    // Display shutdown message
+    u8g2.clearBuffer();
+    u8g2.setFont(LABEL_FONT);
+    u8g2.drawStr(10, 10, "BATTERY LOW");
+    u8g2.drawStr(10, 25, "SHUTTING DOWN");
+    u8g2.sendBuffer();
+    
+    // Delay to show message
+    delay(3000);
+  }
+  // Check if battery has recovered and we can turn load back on
+  else if (voltage >= BATTERY_VOLTAGE_RECOVERY && shutdownActivated) {
+    // Deactivate shutdown
+    shutdownActivated = false;
+    
+    // Turn off relay to reconnect load
+    digitalWrite(RELAY_PIN, LOW);
+    
+    // Display recovery message
+    u8g2.clearBuffer();
+    u8g2.setFont(LABEL_FONT);
+    u8g2.drawStr(10, 10, "BATTERY OK");
+    u8g2.drawStr(10, 25, "SYSTEM ON");
+    u8g2.sendBuffer();
+    
+    // Delay to show message
+    delay(2000);
+  }
+}
+
 void setup() {
   // Initialize the OLED display
   u8g2.begin();
+  
+  // Initialize relay pin
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW); // Start with relay off
+  
+  // Initialize reset button pin
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
   
   // Initialize LED pins
   pinMode(LED_RED_PIN, OUTPUT);
@@ -233,6 +286,28 @@ void loop() {
   float adcVoltageOutput = adcValueOutput * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
   outputVoltage = adcVoltageOutput / OUTPUT_VOLTAGE_RATIO;
   
+  // Check for reset button press (with debouncing)
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastResetButtonPress > 1000) { // 1 second debounce
+      lastResetButtonPress = currentTime;
+      
+      // Reset shutdown state if activated
+      if (shutdownActivated) {
+        shutdownActivated = false;
+        digitalWrite(RELAY_PIN, LOW); // Turn relay off
+        
+        // Display reset message
+        u8g2.clearBuffer();
+        u8g2.setFont(LABEL_FONT);
+        u8g2.drawStr(10, 10, "MANUAL RESET");
+        u8g2.drawStr(10, 25, "SYSTEM ON");
+        u8g2.sendBuffer();
+        delay(2000);
+      }
+    }
+  }
+  
   // Add readings to samples arrays
   batterySamples[sampleIndex] = batteryVoltage;
   outputSamples[sampleIndex] = outputVoltage;
@@ -242,44 +317,49 @@ void loop() {
   float avgBatteryVoltage = getAverage(batterySamples);
   float avgOutputVoltage = getAverage(outputSamples);
   
-  // Handle LED pulsing
-  handleLedPulsing(avgBatteryVoltage);
+  // Handle relay and shutdown procedure
+  handleRelayAndShutdown(avgBatteryVoltage);
   
-  // Clear the display
-  u8g2.clearBuffer();
-  
-  // Set font for labels - using a narrow font
-  u8g2.setFont(LABEL_FONT);
-  
-  // Draw left side - "BAT" text vertically
-  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
-  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
-  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
-  
-  // Draw right side - "OUT" text vertically
-  u8g2.setFont(LABEL_FONT);
-  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
-  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
-  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
-  
-  // Draw battery voltage with a bold font
-  u8g2.setFont(VOLTAGE_FONT);
-  char batteryVoltageStr[6];
-  dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
-  u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
-  
-  // Draw output voltage with a bold font
-  u8g2.setFont(VOLTAGE_FONT);
-  char outputVoltageStr[6];
-  dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
-  u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
-  
-  // Draw horizontal lines
-  u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
-  u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
-  
-  // Send buffer to display
-  u8g2.sendBuffer();
+  // Handle LED pulsing (only if shutdown not activated)
+  if (!shutdownActivated) {
+    handleLedPulsing(avgBatteryVoltage);
+    
+    // Clear the display
+    u8g2.clearBuffer();
+    
+    // Set font for labels - using a narrow font
+    u8g2.setFont(LABEL_FONT);
+    
+    // Draw left side - "BAT" text vertically
+    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
+    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
+    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+    
+    // Draw right side - "OUT" text vertically
+    u8g2.setFont(LABEL_FONT);
+    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
+    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
+    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+    
+    // Draw battery voltage with a bold font
+    u8g2.setFont(VOLTAGE_FONT);
+    char batteryVoltageStr[6];
+    dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
+    u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
+    
+    // Draw output voltage with a bold font
+    u8g2.setFont(VOLTAGE_FONT);
+    char outputVoltageStr[6];
+    dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
+    u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
+    
+    // Draw horizontal lines
+    u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
+    u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
+    
+    // Send buffer to display
+    u8g2.sendBuffer();
+  }
   
   // Wait before next update
   delay(50);
