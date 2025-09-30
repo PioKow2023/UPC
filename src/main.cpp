@@ -1,0 +1,164 @@
+#include <Wire.h>
+#include <U8g2lib.h>
+
+#ifdef U8X8_HAVE_HW_I2C
+#include <Wire.h>
+#endif
+
+// Display dimensions
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 32
+
+// Pin definitions
+#define OLED_SDA_PIN 8
+#define OLED_SCL_PIN 9
+#define OLED_RESET_PIN U8X8_PIN_NONE
+
+// ADC pins for voltage measurement
+#define BATTERY_VOLTAGE_PIN 0
+#define OUTPUT_VOLTAGE_PIN 1
+
+// Voltage calculation constants
+// Voltage divider: R1=47k, R2=10k => ratio = 10/(47+10) = 0.175439
+// Calibrated ratios based on actual measurements
+#define BATTERY_VOLTAGE_RATIO 0.1968
+#define OUTPUT_VOLTAGE_RATIO 0.1991
+
+#define ADC_REF_VOLTAGE 3.3
+#define ADC_MAX_VALUE 4095.0
+
+// Filter settings
+#define SAMPLES_COUNT 20
+
+// Text positions
+#define BAT_LABEL_X 1
+#define BAT_LABEL_Y_START 10
+#define BAT_LABEL_Y_INCREMENT 8
+
+#define OUT_LABEL_X 69
+#define OUT_LABEL_Y_START 10
+#define OUT_LABEL_Y_INCREMENT 8
+
+#define BAT_VOLTAGE_X 10
+#define BAT_VOLTAGE_Y 24
+
+#define OUT_VOLTAGE_X 79
+#define OUT_VOLTAGE_Y 24
+
+// Voltage values
+float batteryVoltage = 0.0;
+float outputVoltage = 0.0;
+
+// Arrays for filtering
+float batterySamples[SAMPLES_COUNT] = {0};
+float outputSamples[SAMPLES_COUNT] = {0};
+int sampleIndex = 0;
+
+// Font definitions
+#define LABEL_FONT u8g2_font_5x8_tf
+#define VOLTAGE_FONT u8g2_font_helvR18_tf
+#define VOLTAGE_UNIT_FONT u8g2_font_helvR10_tf
+
+// Horizontal lines positions
+#define HORIZONTAL_LINE_Y 31
+#define HORIZONTAL_LINE_X1_START 1
+#define HORIZONTAL_LINE_X1_END 60
+#define HORIZONTAL_LINE_X2_START 69
+#define HORIZONTAL_LINE_X2_END 128
+
+// Create display object for SSD1306 128x32 OLED
+U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0, OLED_RESET_PIN, OLED_SCL_PIN, OLED_SDA_PIN);
+
+// Function to calculate average value
+float getAverage(float samples[]) {
+  float sum = 0;
+  for (int i = 0; i < SAMPLES_COUNT; i++) {
+    sum += samples[i];
+  }
+  return sum / SAMPLES_COUNT;
+}
+
+void setup() {
+  // Initialize the OLED display
+  u8g2.begin();
+  
+  // Clear the display
+  u8g2.clearBuffer();
+  
+  // Set ADC to 12-bit resolution
+  analogReadResolution(12);
+  
+  // Initialize samples arrays with first readings
+  int adcValueBattery = analogRead(BATTERY_VOLTAGE_PIN);
+  float adcVoltageBattery = adcValueBattery * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
+  batteryVoltage = adcVoltageBattery / BATTERY_VOLTAGE_RATIO;
+  
+  int adcValueOutput = analogRead(OUTPUT_VOLTAGE_PIN);
+  float adcVoltageOutput = adcValueOutput * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
+  outputVoltage = adcVoltageOutput / OUTPUT_VOLTAGE_RATIO;
+  
+  for (int i = 0; i < SAMPLES_COUNT; i++) {
+    batterySamples[i] = batteryVoltage;
+    outputSamples[i] = outputVoltage;
+  }
+}
+
+void loop() {
+  // Read battery voltage
+  int adcValueBattery = analogRead(BATTERY_VOLTAGE_PIN);
+  float adcVoltageBattery = adcValueBattery * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
+  batteryVoltage = adcVoltageBattery / BATTERY_VOLTAGE_RATIO;
+  
+  // Read output voltage
+  int adcValueOutput = analogRead(OUTPUT_VOLTAGE_PIN);
+  float adcVoltageOutput = adcValueOutput * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
+  outputVoltage = adcVoltageOutput / OUTPUT_VOLTAGE_RATIO;
+  
+  // Add readings to samples arrays
+  batterySamples[sampleIndex] = batteryVoltage;
+  outputSamples[sampleIndex] = outputVoltage;
+  sampleIndex = (sampleIndex + 1) % SAMPLES_COUNT;
+  
+  // Calculate average values
+  float avgBatteryVoltage = getAverage(batterySamples);
+  float avgOutputVoltage = getAverage(outputSamples);
+  
+  // Clear the display
+  u8g2.clearBuffer();
+  
+  // Set font for labels - using a narrow font
+  u8g2.setFont(LABEL_FONT);
+  
+  // Draw left side - "BAT" text vertically
+  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
+  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
+  u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+  
+  // Draw right side - "OUT" text vertically
+  u8g2.setFont(LABEL_FONT);
+  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
+  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
+  u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+  
+  // Draw battery voltage with a bold font
+  u8g2.setFont(VOLTAGE_FONT);
+  char batteryVoltageStr[6];
+  dtostrf(avgBatteryVoltage, 4, 1, batteryVoltageStr);
+  u8g2.drawStr(BAT_VOLTAGE_X, BAT_VOLTAGE_Y, batteryVoltageStr);
+  
+  // Draw output voltage with a bold font
+  u8g2.setFont(VOLTAGE_FONT);
+  char outputVoltageStr[6];
+  dtostrf(avgOutputVoltage, 4, 1, outputVoltageStr);
+  u8g2.drawStr(OUT_VOLTAGE_X, OUT_VOLTAGE_Y, outputVoltageStr);
+  
+  // Draw horizontal lines
+  u8g2.drawHLine(HORIZONTAL_LINE_X1_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X1_END - HORIZONTAL_LINE_X1_START);
+  u8g2.drawHLine(HORIZONTAL_LINE_X2_START, HORIZONTAL_LINE_Y, HORIZONTAL_LINE_X2_END - HORIZONTAL_LINE_X2_START);
+  
+  // Send buffer to display
+  u8g2.sendBuffer();
+  
+  // Wait before next update
+  delay(50);
+}
