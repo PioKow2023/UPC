@@ -14,6 +14,11 @@
 #define OLED_SCL_PIN 9
 #define OLED_RESET_PIN U8X8_PIN_NONE
 
+// RGB LED pins
+#define LED_RED_PIN 2
+#define LED_GREEN_PIN 3
+#define LED_BLUE_PIN 4
+
 // ADC pins for voltage measurement
 #define BATTERY_VOLTAGE_PIN 0
 #define OUTPUT_VOLTAGE_PIN 1
@@ -23,9 +28,24 @@
 // Calibrated ratios based on actual measurements
 #define BATTERY_VOLTAGE_RATIO 0.1968
 #define OUTPUT_VOLTAGE_RATIO 0.1991
-
 #define ADC_REF_VOLTAGE 3.3
 #define ADC_MAX_VALUE 4095.0
+
+// Voltage thresholds for LED colors
+#define BATTERY_VOLTAGE_VERY_HIGH 14.0
+#define BATTERY_VOLTAGE_HIGH 11.8
+#define BATTERY_VOLTAGE_LOW 11.4
+#define BATTERY_VOLTAGE_VERY_LOW 10.0
+
+// LED pulse parameters (in seconds for full cycle: brighten + dim)
+#define PULSE_VERY_SLOW 4     // 4 seconds for green
+#define PULSE_SLOW 2          // 2 seconds for blue and red (very low voltage)
+#define PULSE_MEDIUM 1        // 1 second for red (low voltage)
+#define PULSE_FAST 0.25       // 0.25 seconds (4 times per second) for red (very high voltage)
+
+// LED brightness levels (0-255)
+#define LED_BRIGHTNESS_MAX 255
+#define LED_BRIGHTNESS_MIN 0
 
 // Filter settings
 #define SAMPLES_COUNT 20
@@ -54,10 +74,16 @@ float batterySamples[SAMPLES_COUNT] = {0};
 float outputSamples[SAMPLES_COUNT] = {0};
 int sampleIndex = 0;
 
+// LED state variables
+unsigned long lastLedUpdate = 0;
+float pulsePeriod = PULSE_VERY_SLOW; // Convert seconds to milliseconds
+int ledBrightness = 0;
+bool ledDirection = true; // true = increasing, false = decreasing
+unsigned long pulseStartTime = 0;
+
 // Font definitions
 #define LABEL_FONT u8g2_font_5x8_tf
 #define VOLTAGE_FONT u8g2_font_helvR18_tf
-#define VOLTAGE_UNIT_FONT u8g2_font_helvR10_tf
 
 // Horizontal lines positions
 #define HORIZONTAL_LINE_Y 31
@@ -78,9 +104,102 @@ float getAverage(float samples[]) {
   return sum / SAMPLES_COUNT;
 }
 
+// Function to calculate maximum LED brightness based on battery voltage
+int getMaxLedBrightness(float voltage) {
+  if (voltage < BATTERY_VOLTAGE_VERY_LOW) {
+    // Below 10V: 1/4 of maximum brightness
+    return LED_BRIGHTNESS_MAX / 4;
+  } else if (voltage <= BATTERY_VOLTAGE_VERY_HIGH) {
+    // 10V to 14V: 1/2 of maximum brightness
+    return LED_BRIGHTNESS_MAX / 2;
+  } else {
+    // Above 14V: full brightness
+    return LED_BRIGHTNESS_MAX;
+  }
+}
+
+// Function to update LED pulse parameters based on battery voltage
+void updateLedParameters(float voltage) {
+  // Calculate maximum brightness for current voltage
+  int maxBrightness = getMaxLedBrightness(voltage);
+  
+  if (voltage > BATTERY_VOLTAGE_VERY_HIGH) {
+    // Very high voltage: Red, pulse 4 times per second
+    pulsePeriod = PULSE_FAST;
+    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    analogWrite(LED_GREEN_PIN, 0);
+    analogWrite(LED_BLUE_PIN, 0);
+  } else if (voltage > BATTERY_VOLTAGE_HIGH) {
+    // High voltage: Green, pulse once every 4 seconds
+    pulsePeriod = PULSE_VERY_SLOW;
+    analogWrite(LED_RED_PIN, 0);
+    analogWrite(LED_GREEN_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    analogWrite(LED_BLUE_PIN, 0);
+  } else if (voltage > BATTERY_VOLTAGE_LOW) {
+    // Medium voltage: Yellow (red + green), pulse once every 2 seconds
+    // Reduce green intensity to get proper yellow color
+    pulsePeriod = PULSE_SLOW;
+    int adjustedRed = (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX;
+    int adjustedGreen = (adjustedRed / 3); // One third of red brightness for proper yellow
+    analogWrite(LED_RED_PIN, adjustedRed);
+    analogWrite(LED_GREEN_PIN, adjustedGreen);
+    analogWrite(LED_BLUE_PIN, 0);
+  } else if (voltage > BATTERY_VOLTAGE_VERY_LOW) {
+    // Low voltage: Red, pulse once every 1 second
+    pulsePeriod = PULSE_MEDIUM;
+    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    analogWrite(LED_GREEN_PIN, 0);
+    analogWrite(LED_BLUE_PIN, 0);
+  } else {
+    // Very low voltage: Red, pulse once every 4 seconds (half the previous speed)
+    pulsePeriod = PULSE_VERY_SLOW;
+    analogWrite(LED_RED_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
+    analogWrite(LED_GREEN_PIN, 0);
+    analogWrite(LED_BLUE_PIN, 0);
+  }
+}
+
+// Function to handle LED pulsing
+void handleLedPulsing(float voltage) {
+  unsigned long currentTime = millis();
+  
+  // Check if we need to start a new pulse cycle
+  unsigned long pulsePeriodMs = (unsigned long)(pulsePeriod * 1000);
+  if (currentTime - pulseStartTime >= pulsePeriodMs) {
+    pulseStartTime = currentTime;
+  }
+  
+  // Calculate position within the current pulse cycle (0 to pulsePeriodMs-1)
+  unsigned long timeInCycle = currentTime - pulseStartTime;
+  
+  // Calculate LED brightness based on position in cycle
+  // First half: brighten (0 to pulsePeriodMs/2-1)
+  // Second half: dim (pulsePeriodMs/2 to pulsePeriodMs-1)
+  if (timeInCycle < pulsePeriodMs/2) {
+    // Brighten: map timeInCycle from 0..pulsePeriodMs/2-1 to 0..255
+    ledBrightness = (int)((timeInCycle * 255) / (pulsePeriodMs/2 - 1));
+  } else {
+    // Dim: map timeInCycle from pulsePeriodMs/2..pulsePeriodMs-1 to 255..0
+    ledBrightness = (int)(((pulsePeriodMs - 1 - timeInCycle) * 255) / (pulsePeriodMs/2 - 1));
+  }
+  
+  // Update LED with new brightness
+  updateLedParameters(voltage);
+}
+
 void setup() {
   // Initialize the OLED display
   u8g2.begin();
+  
+  // Initialize LED pins
+  pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  
+  // Turn off LED initially
+  analogWrite(LED_RED_PIN, 0);
+  analogWrite(LED_GREEN_PIN, 0);
+  analogWrite(LED_BLUE_PIN, 0);
   
   // Clear the display
   u8g2.clearBuffer();
@@ -122,6 +241,9 @@ void loop() {
   // Calculate average values
   float avgBatteryVoltage = getAverage(batterySamples);
   float avgOutputVoltage = getAverage(outputSamples);
+  
+  // Handle LED pulsing
+  handleLedPulsing(avgBatteryVoltage);
   
   // Clear the display
   u8g2.clearBuffer();
