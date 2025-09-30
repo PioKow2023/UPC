@@ -13,8 +13,8 @@
 #define OLED_SDA_PIN 8
 #define OLED_SCL_PIN 9
 #define OLED_RESET_PIN U8X8_PIN_NONE
-#define RELAY_PIN 5  // Define relay pin - can be changed as needed
-#define RESET_BUTTON_PIN 6  // Define reset button pin
+#define RELAY_PIN 7  // Relay pin changed to GPIO7
+#define POWER_LOSS_PIN 6  // Power loss detection pin
 
 // RGB LED pins
 #define LED_RED_PIN 2
@@ -86,6 +86,9 @@ bool ledDirection = true; // true = increasing, false = decreasing
 unsigned long pulseStartTime = 0;
 bool shutdownActivated = false; // Flag to track if shutdown has been activated
 unsigned long lastResetButtonPress = 0; // Debounce tracking for reset button
+bool powerLossDetected = false; // Flag to track power loss
+unsigned long lastPowerLossBlink = 0; // For blinking BAT/OUT labels during power loss
+bool powerLossLabelsVisible = true; // For toggling BAT/OUT labels visibility
 
 // Font definitions
 #define LABEL_FONT u8g2_font_5x8_tf
@@ -142,13 +145,22 @@ void updateLedParameters(float voltage) {
     analogWrite(LED_GREEN_PIN, (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_LOW) {
-    // Medium voltage: Yellow (red + green), pulse once every 2 seconds
-    // Reduce green intensity to get proper yellow color
-    pulsePeriod = PULSE_SLOW;
-    int adjustedRed = (ledBrightness * maxBrightness) / LED_BRIGHTNESS_MAX;
-    int adjustedGreen = (adjustedRed / 3); // One third of red brightness for proper yellow
-    analogWrite(LED_RED_PIN, adjustedRed);
-    analogWrite(LED_GREEN_PIN, adjustedGreen);
+    // Medium voltage: Rainbow transition from red to green
+    // Map voltage (11.4V-11.8V) to color (red to green)
+    float voltageRange = BATTERY_VOLTAGE_HIGH - BATTERY_VOLTAGE_LOW;
+    float voltageOffset = voltage - BATTERY_VOLTAGE_LOW;
+    float ratio = voltageOffset / voltageRange;
+    
+    // Ensure ratio is within bounds
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    
+    // Calculate RGB values for smooth transition from red to green
+    int redValue = (int)((1.0 - ratio) * maxBrightness);
+    int greenValue = (int)(ratio * maxBrightness);
+    
+    analogWrite(LED_RED_PIN, redValue);
+    analogWrite(LED_GREEN_PIN, greenValue);
     analogWrite(LED_BLUE_PIN, 0);
   } else if (voltage > BATTERY_VOLTAGE_VERY_LOW) {
     // Low voltage: Red, pulse once every 1 second
@@ -241,8 +253,8 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW); // Start with relay off
   
-  // Initialize reset button pin
-  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  // Initialize power loss detection pin
+  pinMode(POWER_LOSS_PIN, INPUT_PULLUP);
   
   // Initialize LED pins
   pinMode(LED_RED_PIN, OUTPUT);
@@ -286,25 +298,39 @@ void loop() {
   float adcVoltageOutput = adcValueOutput * (ADC_REF_VOLTAGE / ADC_MAX_VALUE);
   outputVoltage = adcVoltageOutput / OUTPUT_VOLTAGE_RATIO;
   
-  // Check for reset button press (with debouncing)
-  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
-    unsigned long currentTime = millis();
-    if (currentTime - lastResetButtonPress > 1000) { // 1 second debounce
-      lastResetButtonPress = currentTime;
+  // Check for power loss (LOW signal indicates power loss)
+  if (digitalRead(POWER_LOSS_PIN) == LOW) {
+    // Detect power loss
+    if (!powerLossDetected) {
+      powerLossDetected = true;
       
-      // Reset shutdown state if activated
-      if (shutdownActivated) {
-        shutdownActivated = false;
-        digitalWrite(RELAY_PIN, LOW); // Turn relay off
-        
-        // Display reset message
-        u8g2.clearBuffer();
-        u8g2.setFont(LABEL_FONT);
-        u8g2.drawStr(10, 10, "MANUAL RESET");
-        u8g2.drawStr(10, 25, "SYSTEM ON");
-        u8g2.sendBuffer();
-        delay(2000);
-      }
+      // Display power loss message
+      u8g2.clearBuffer();
+      u8g2.setFont(LABEL_FONT);
+      u8g2.drawStr(10, 10, "POWER LOST");
+      u8g2.drawStr(10, 25, "RUNNING ON BAT");
+      u8g2.sendBuffer();
+      delay(3000);
+    }
+    
+    // Handle blinking BAT/OUT labels during power loss
+    unsigned long currentTime = millis();
+    if (currentTime - lastPowerLossBlink >= 500) { // Blink every 500ms
+      lastPowerLossBlink = currentTime;
+      powerLossLabelsVisible = !powerLossLabelsVisible;
+    }
+  } else {
+    // Power restored
+    if (powerLossDetected) {
+      powerLossDetected = false;
+      powerLossLabelsVisible = true; // Ensure labels are visible when power is restored
+      
+      // Display power restored message
+      u8g2.clearBuffer();
+      u8g2.setFont(LABEL_FONT);
+      u8g2.drawStr(10, 10, "POWER RESTORED");
+      u8g2.sendBuffer();
+      delay(2000);
     }
   }
   
@@ -330,16 +356,19 @@ void loop() {
     // Set font for labels - using a narrow font
     u8g2.setFont(LABEL_FONT);
     
-    // Draw left side - "BAT" text vertically
-    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
-    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
-    u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+    // Draw left side - "BAT" text vertically (conditionally during power loss)
+    if (!powerLossDetected || powerLossLabelsVisible) {
+      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START, "B");
+      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + BAT_LABEL_Y_INCREMENT, "A");
+      u8g2.drawStr(BAT_LABEL_X, BAT_LABEL_Y_START + 2 * BAT_LABEL_Y_INCREMENT, "T");
+    }
     
-    // Draw right side - "OUT" text vertically
-    u8g2.setFont(LABEL_FONT);
-    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
-    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
-    u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+    // Draw right side - "OUT" text vertically (conditionally during power loss)
+    if (!powerLossDetected || powerLossLabelsVisible) {
+      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START, "O");
+      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + OUT_LABEL_Y_INCREMENT, "U");
+      u8g2.drawStr(OUT_LABEL_X, OUT_LABEL_Y_START + 2 * OUT_LABEL_Y_INCREMENT, "T");
+    }
     
     // Draw battery voltage with a bold font
     u8g2.setFont(VOLTAGE_FONT);
