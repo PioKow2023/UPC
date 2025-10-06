@@ -1,5 +1,5 @@
 // Version
-const char* Version = "1.6.0";
+const char* Version = "1.7.0";
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -58,6 +58,7 @@ bool isPowerLost = false;
 bool isUndervoltage = false;
 bool isOvervoltage = false;
 uint32_t systemStartTime = 0;
+uint32_t normalModeStartTime = 0;
 
 uint32_t undervoltageStartTime = 0;
 bool undervoltageShutdownActive = false;
@@ -78,7 +79,7 @@ void displayTask(void *pvParameters);
 void logicAndLedsTask(void *pvParameters);
 void mqttTask(void *pvParameters);
 void drawMainScreen(float batV, float outV, bool powerLost, bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShutdown, uint32_t uvStartTime, uint32_t ovStartTime, uint32_t uvPostShutdownTime, uint32_t ovPostShutdownTime, uint32_t uvRecoveryStartTime, uint32_t ovRecoveryStartTime);
-void handleLeds(bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShutdown, float voltage);
+void handleLeds(bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShutdown, float voltage, bool uvRecovery, bool ovRecovery);
 
 void setup() {
   pinMode(RELAY_PIN, OUTPUT); digitalWrite(RELAY_PIN, LOW);
@@ -96,6 +97,7 @@ void setup() {
   dataMutex = xSemaphoreCreateMutex();
   if (dataMutex == NULL) { return; }
   systemStartTime = millis();
+  normalModeStartTime = systemStartTime;
 
   xTaskCreate(sensorsTask, "Sensors", 2048, NULL, 2, NULL);
   xTaskCreate(displayTask, "Display", 4096, NULL, 1, NULL);
@@ -175,7 +177,7 @@ void logicAndLedsTask(void *pvParameters) {
   static bool wasUndervoltage = false;
   
   for (;;) {
-    // Poprawka: Ca³a logika stanu wewn¹trz jednej sekcji krytycznej (Mutex)
+    // Poprawka: Caï¿½a logika stanu wewnï¿½trz jednej sekcji krytycznej (Mutex)
     if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
       float localOutV = avgOutputVoltage;
       isPowerLost = (digitalRead(POWER_LOSS_PIN) == LOW);
@@ -251,7 +253,15 @@ void logicAndLedsTask(void *pvParameters) {
       }
 
       digitalWrite(RELAY_PIN, (undervoltageShutdownActive || overvoltageShutdownActive) ? HIGH : LOW);
-      handleLeds(isUndervoltage, isOvervoltage, undervoltageShutdownActive, overvoltageShutdownActive, localOutV);
+      handleLeds(isUndervoltage, isOvervoltage, undervoltageShutdownActive, overvoltageShutdownActive, localOutV, undervoltageRecoveryStartTime != 0, overvoltageRecoveryStartTime != 0);
+
+      // Update normal mode start time
+      static bool lastIsNormal = true;
+      bool currentIsNormal = !isUndervoltage && !isOvervoltage && !undervoltageShutdownActive && !overvoltageShutdownActive;
+      if (currentIsNormal && !lastIsNormal) {
+        normalModeStartTime = millis();
+      }
+      lastIsNormal = currentIsNormal;
 
       xSemaphoreGive(dataMutex);
     }
@@ -338,7 +348,7 @@ void drawMainScreen(float batV, float outV, bool powerLost, bool undervoltage, b
   int wholeWidth = u8g2.getStrWidth(buf);
   sprintf(buf + strlen(buf), ".%d", batDecimal);
   int totalWidth = u8g2.getStrWidth(buf);
-  int x = 56 - totalWidth;
+  int x = 60 - totalWidth;
   sprintf(buf, "%d", batWhole);
   u8g2.drawStr(x, 15, buf);
   u8g2.drawStr(x + wholeWidth, 15, ".");
@@ -356,7 +366,7 @@ void drawMainScreen(float batV, float outV, bool powerLost, bool undervoltage, b
   wholeWidth = u8g2.getStrWidth(buf);
   sprintf(buf + strlen(buf), ".%d", outDecimal);
   totalWidth = u8g2.getStrWidth(buf);
-  x = 56 - totalWidth;
+  x = 60 - totalWidth;
   sprintf(buf, "%d", outWhole);
   u8g2.drawStr(x, 33, buf);
   u8g2.drawStr(x + wholeWidth, 33, ".");
@@ -443,7 +453,7 @@ void drawMainScreen(float batV, float outV, bool powerLost, bool undervoltage, b
     u8g2.drawBox(colonX, 4, 2, 2); u8g2.drawBox(colonX, 9, 2, 2);
     u8g2.drawStr(x_timer + minWidth + 4, 15, secStr);
   } else {
-    uint32_t uptimeMs = millis() - systemStartTime; int uptimeSeconds = uptimeMs / 1000; int uptimeMinutes = uptimeSeconds / 60; int uptimeSecs = uptimeSeconds % 60;
+    uint32_t uptimeMs = millis() - normalModeStartTime; int uptimeSeconds = uptimeMs / 1000; int uptimeMinutes = uptimeSeconds / 60; int uptimeSecs = uptimeSeconds % 60;
     char minStr[4], secStr[4];
     sprintf(minStr, "%d", uptimeMinutes); sprintf(secStr, "%02d", uptimeSecs);
     int minWidth = u8g2.getStrWidth(minStr); int totalWidth = minWidth + 4 + u8g2.getStrWidth(secStr); int x_timer = 128 - totalWidth;
@@ -463,12 +473,31 @@ void drawMainScreen(float batV, float outV, bool powerLost, bool undervoltage, b
   }
 }
 
-void handleLeds(bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShutdown, float voltage) {
-  // Logika dla diody ze wspóln¹ katod¹: 255 = max jasnoœæ, 0 = wy³¹czona
+void handleLeds(bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShutdown, float voltage, bool uvRecovery, bool ovRecovery) {
+  // Logika dla diody ze wspï¿½lnï¿½ katodï¿½: 255 = max jasnoï¿½ï¿½, 0 = wyï¿½ï¿½czona
   const int maxBrightness = 255;
   int redValue = 0, greenValue = 0, blueValue = 0;
   
-  if (overvoltage || ovShutdown) {
+  if (uvRecovery || ovRecovery) {
+      unsigned long currentTime = millis();
+      bool blink = (currentTime % 1000 < 500);
+      if (blink) {
+        float v = constrain(voltage, 11.0, 13.0);
+        if (v <= 12.0) {
+          redValue = map(v * 100, 1100, 1200, maxBrightness, 0);
+          greenValue = maxBrightness;
+          blueValue = 0;
+        } else {
+          redValue = map(v * 100, 1200, 1300, 0, maxBrightness);
+          greenValue = map(v * 100, 1200, 1300, maxBrightness, 0);
+          blueValue = map(v * 100, 1200, 1300, 0, maxBrightness);
+        }
+      } else {
+        redValue = 0;
+        greenValue = 0;
+        blueValue = 0;
+      }
+  } else if (overvoltage || ovShutdown) {
       // Make blinking more pronounced by using full on/off cycle
       unsigned long currentTime = millis();
       if (currentTime % 200 < 100) {  // Increased period for more visible blinking
@@ -489,15 +518,15 @@ void handleLeds(bool undervoltage, bool overvoltage, bool uvShutdown, bool ovShu
         redValue = (int)(((1.0f - phase) / 0.7f) * maxBrightness * 0.7);
       }
   } else {
-      // Nowa funkcja: P³ynna zmiana koloru w zale¿noœci od napiêcia
+      // Nowa funkcja: Pï¿½ynna zmiana koloru w zaleï¿½noï¿½ci od napiï¿½cia
       float v = constrain(voltage, 11.0, 13.0);
       if (v <= 12.0) {
-        // Przejœcie z pomarañczowego (11V) do zielonego (12V)
+        // Przejï¿½cie z pomaraï¿½czowego (11V) do zielonego (12V)
         redValue = map(v * 100, 1100, 1200, maxBrightness, 0);
         greenValue = maxBrightness;
         blueValue = 0;
       } else {
-        // Przejœcie z zielonego (12V) do fioletowego (13V)
+        // Przejï¿½cie z zielonego (12V) do fioletowego (13V)
         redValue = map(v * 100, 1200, 1300, 0, maxBrightness);
         greenValue = map(v * 100, 1200, 1300, maxBrightness, 0);
         blueValue = map(v * 100, 1200, 1300, 0, maxBrightness);
